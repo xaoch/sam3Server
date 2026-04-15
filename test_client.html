@@ -1,0 +1,1148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SAM3 Mini Client (2 Objects)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 16px; max-width: 1200px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; flex: 1; min-width: 320px; }
+    h1, h2 { margin-top: 0; }
+    .controls { display: grid; grid-template-columns: 160px 1fr; gap: 8px 10px; align-items: center; }
+    input[type="number"], input[type="text"], select { width: 100%; padding: 6px 8px; }
+    button { padding: 8px 10px; border-radius: 8px; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    small { color: #555; }
+    .stageWrap { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+    .stage { position: relative; display: inline-block; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; background: #fafafa; }
+    canvas { display: block; max-width: 100%; height: auto; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#eef; border:1px solid #ccd; font-size:12px; }
+    .log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; background:#fafafa; border:1px solid #eee; padding:10px; border-radius:10px; max-height:280px; overflow:auto; }
+    .thumbs { display:flex; gap:8px; flex-wrap: wrap; margin-top: 10px; }
+    .thumbCard { border:1px solid #ddd; border-radius:8px; padding:6px; width: 140px; background:#fff; }
+    .thumbCard img { width: 100%; height: auto; border-radius:6px; border:1px solid #eee; display:block; }
+    .thumbCard .cap { font-size:12px; color:#444; margin-top:4px; }
+    .hint { color:#666; font-size: 12px; line-height: 1.4; margin-top: 6px; }
+    .obj-tabs { display:flex; gap:8px; flex-wrap:wrap; }
+    .obj-btn.active { border-color:#333; background:#eaeaea; font-weight:600; }
+    .obj-box { border:1px solid #ddd; border-radius:10px; padding:10px; margin-top:10px; }
+    .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#555; margin-top:8px; }
+    .dot { display:inline-block; width:12px; height:12px; border-radius:999px; vertical-align:middle; margin-right:5px; border:1px solid #fff; box-shadow:0 0 0 1px #999 inset; }
+    .previewGrid { display:grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .previewBox { border:1px solid #ddd; border-radius:10px; padding:8px; }
+    .previewBox h3 { margin:0 0 8px 0; font-size:14px; }
+    .miniStage { border:1px solid #eee; border-radius:8px; overflow:hidden; display:inline-block; background:#fafafa; }
+    .statusLine { font-size:12px; color:#444; margin-top:6px; }
+    .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+    .trajWrap { margin-top:10px; max-height:260px; overflow:auto; border:1px solid #e6e6e6; border-radius:8px; }
+    .trajTable { width:100%; border-collapse:collapse; font-size:12px; }
+    .trajTable th, .trajTable td { border-bottom:1px solid #eee; padding:6px 8px; text-align:right; }
+    .trajTable th { position:sticky; top:0; background:#fafafa; text-align:right; z-index:1; }
+    .trajTable th:first-child, .trajTable td:first-child { text-align:left; }
+  </style>
+</head>
+<body>
+  <h1>SAM3 Mini Client — 2 Objects</h1>
+  <div class="hint">
+    Left click = <b>positive</b> point, Right click = <b>negative</b> point.
+    Choose the active object first.
+    Press <b>Backspace</b> to undo the last point of the active object, <b>Esc</b> to clear the active object.
+  </div>
+
+  <div class="row" style="margin-top:12px;">
+    <div class="card">
+      <h2>1) Server</h2>
+      <div class="controls">
+        <label>Base URL</label>
+        <input id="baseUrl" type="text" value="http://localhost:8000" />
+
+        <label></label>
+        <button id="btnHealth">Health</button>
+
+        <label>Output</label>
+        <select id="outputFmt">
+          <option value="png" selected>png</option>
+          <option value="rle">rle</option>
+        </select>
+
+        <label>Mask threshold</label>
+        <input id="maskThreshold" type="number" step="0.05" value="0.0" />
+
+        <label>Binarize</label>
+        <select id="binarize">
+          <option value="true" selected>true</option>
+          <option value="false">false</option>
+        </select>
+
+        <label>Propagate max frames</label>
+        <input id="maxFrames" type="number" step="1" value="60" />
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2) Upload image or video</h2>
+      <div class="controls">
+        <label>File</label>
+        <input id="fileInput" type="file" accept="image/*,video/*" />
+
+        <label>Mode</label>
+        <div>
+          <span id="modeLabel" class="badge">none</span>
+          <small id="fileInfo" style="margin-left:8px;"></small>
+        </div>
+
+        <label>Prompt mode</label>
+        <select id="promptMode">
+          <option value="points" selected>points</option>
+          <option value="text">text</option>
+        </select>
+
+        <label>Text prompt</label>
+        <input id="textPrompt" type="text" placeholder="e.g. red ball" />
+
+        <label>Active object</label>
+        <div class="obj-tabs">
+          <button id="obj1Btn" class="obj-btn active" type="button">Object 1</button>
+          <button id="obj2Btn" class="obj-btn" type="button">Object 2</button>
+        </div>
+
+        <label></label>
+        <button id="btnClear" disabled>Clear active object points</button>
+
+        <label></label>
+        <button id="btnUndo" disabled>Undo last point</button>
+
+        <label></label>
+        <button id="btnSubmitPrompt" disabled>Submit prompt (preview)</button>
+
+        <label></label>
+        <button id="btnPropagate" disabled>Propagate (video)</button>
+      </div>
+
+      <div class="obj-box">
+        <div><b>Object 1</b>: <span id="obj1Count">0</span> points</div>
+        <div><b>Object 2</b>: <span id="obj2Count">0</span> points</div>
+        <div class="legend">
+          <span><span class="dot" style="background:#00c853;"></span>Obj1 positive</span>
+          <span><span class="dot" style="background:#d50000;"></span>Obj1 negative</span>
+          <span><span class="dot" style="background:#2962ff;"></span>Obj2 positive</span>
+          <span><span class="dot" style="background:#ff6d00;"></span>Obj2 negative</span>
+        </div>
+      </div>
+
+      <div class="stageWrap">
+        <div class="stage">
+          <video id="video" controls playsinline style="display:none; max-width:100%;"></video>
+          <canvas id="canvas"></canvas>
+        </div>
+      </div>
+      <div class="hint">
+        For video: scrub to the desired moment, add points for Object 1 and/or Object 2, then submit prompt.
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:16px;">
+    <div class="card">
+      <h2>3) Prompt preview</h2>
+      <div class="previewGrid">
+        <div class="previewBox">
+          <h3>Object 1</h3>
+          <div class="miniStage"><canvas id="preview1"></canvas></div>
+          <div id="preview1Status" class="statusLine">No preview yet.</div>
+        </div>
+        <div class="previewBox">
+          <h3>Object 2</h3>
+          <div class="miniStage"><canvas id="preview2"></canvas></div>
+          <div id="preview2Status" class="statusLine">No preview yet.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>4) Results</h2>
+      <div id="resultsMeta" class="hint"></div>
+      <div class="toolbar">
+        <button id="btnDownloadCsv" disabled>Download trajectory CSV</button>
+        <button id="btnDownloadJson" disabled>Download trajectory JSON</button>
+        <span id="trajMeta" class="hint"></span>
+      </div>
+      <div class="thumbs" id="thumbs"></div>
+      <div class="trajWrap">
+        <table class="trajTable">
+          <thead>
+            <tr>
+              <th>frame</th>
+              <th>obj_id</th>
+              <th>center_x</th>
+              <th>center_y</th>
+              <th>area_px</th>
+              <th>score</th>
+            </tr>
+          </thead>
+          <tbody id="trajectoryBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Log</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+
+  const baseUrlEl = $("baseUrl");
+  const fileInput = $("fileInput");
+  const canvas = $("canvas");
+  const ctx = canvas.getContext("2d");
+  const video = $("video");
+
+  const preview1 = $("preview1");
+  const preview2 = $("preview2");
+  const pctx1 = preview1.getContext("2d");
+  const pctx2 = preview2.getContext("2d");
+  const preview1Status = $("preview1Status");
+  const preview2Status = $("preview2Status");
+
+  const btnHealth = $("btnHealth");
+  const btnClear = $("btnClear");
+  const btnUndo = $("btnUndo");
+  const btnSubmitPrompt = $("btnSubmitPrompt");
+  const btnPropagate = $("btnPropagate");
+
+  const outputFmtEl = $("outputFmt");
+  const maskThresholdEl = $("maskThreshold");
+  const binarizeEl = $("binarize");
+  const maxFramesEl = $("maxFrames");
+  const promptModeEl = $("promptMode");
+  const textPromptEl = $("textPrompt");
+
+  const modeLabel = $("modeLabel");
+  const fileInfo = $("fileInfo");
+  const logEl = $("log");
+  const thumbs = $("thumbs");
+  const resultsMeta = $("resultsMeta");
+  const btnDownloadCsv = $("btnDownloadCsv");
+  const btnDownloadJson = $("btnDownloadJson");
+  const trajectoryBody = $("trajectoryBody");
+  const trajMeta = $("trajMeta");
+
+  const obj1Btn = $("obj1Btn");
+  const obj2Btn = $("obj2Btn");
+  const obj1Count = $("obj1Count");
+  const obj2Count = $("obj2Count");
+
+  let mode = "none";
+  let imageObj = null;
+  let file = null;
+
+  let activeObjectId = 1;
+  let promptMode = "points";
+  let objectPoints = {
+    1: [],
+    2: []
+  };
+
+  // Video state
+  let videoId = null;
+  let sessionId = null;
+  let numFrames = null;
+  let serverW = null;
+  let serverH = null;
+  let trajectoryRows = [];
+
+  const pointStyles = {
+    1: { pos: "#00c853", neg: "#d50000" },
+    2: { pos: "#2962ff", neg: "#ff6d00" }
+  };
+
+  function log(msg) {
+    const ts = new Date().toISOString().slice(11, 19);
+    logEl.textContent = `[${ts}] ${msg}\n` + logEl.textContent;
+  }
+
+  function getBaseUrl() {
+    return baseUrlEl.value.replace(/\/+$/, "");
+  }
+
+  function getActivePoints() {
+    return objectPoints[activeObjectId];
+  }
+
+  function updateObjectButtons() {
+    obj1Btn.classList.toggle("active", activeObjectId === 1);
+    obj2Btn.classList.toggle("active", activeObjectId === 2);
+  }
+
+  function updateCounts() {
+    obj1Count.textContent = objectPoints[1].length;
+    obj2Count.textContent = objectPoints[2].length;
+    btnUndo.disabled = getActivePoints().length === 0 || mode === "none" || promptMode !== "points";
+  }
+
+  function setMode(newMode) {
+    mode = newMode;
+    modeLabel.textContent = newMode;
+    btnClear.disabled = (mode === "none");
+    btnUndo.disabled = (mode === "none" || getActivePoints().length === 0);
+    btnSubmitPrompt.disabled = (mode === "none");
+    btnPropagate.disabled = (mode !== "video" || !sessionId);
+    applyPromptModeUiState();
+  }
+
+  function applyPromptModeUiState() {
+    const isPoints = promptMode === "points";
+
+    obj1Btn.disabled = !isPoints;
+    obj2Btn.disabled = !isPoints;
+    btnClear.disabled = (mode === "none") || !isPoints;
+    btnUndo.disabled = (mode === "none" || getActivePoints().length === 0) || !isPoints;
+
+    if (mode === "video" && !isPoints) {
+      btnSubmitPrompt.disabled = true;
+    } else {
+      btnSubmitPrompt.disabled = (mode === "none");
+    }
+
+    textPromptEl.disabled = !((mode === "image") && (promptMode === "text"));
+  }
+
+  function clearResults() {
+    thumbs.innerHTML = "";
+    resultsMeta.textContent = "";
+    trajectoryRows = [];
+    trajectoryBody.innerHTML = "";
+    trajMeta.textContent = "";
+    btnDownloadCsv.disabled = true;
+    btnDownloadJson.disabled = true;
+  }
+
+  async function centerOfMassFromMask(maskB64) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = img.width;
+        c.height = img.height;
+        const cctx = c.getContext("2d", { willReadFrequently: true });
+        cctx.drawImage(img, 0, 0);
+        const data = cctx.getImageData(0, 0, c.width, c.height).data;
+
+        let area = 0;
+        let sumX = 0;
+        let sumY = 0;
+        for (let y = 0; y < c.height; y++) {
+          const row = y * c.width * 4;
+          for (let x = 0; x < c.width; x++) {
+            const i = row + x * 4;
+            const v = data[i];
+            if (v > 127) {
+              area += 1;
+              sumX += x;
+              sumY += y;
+            }
+          }
+        }
+
+        if (area === 0) {
+          resolve({ cx: null, cy: null, area: 0 });
+          return;
+        }
+        resolve({ cx: sumX / area, cy: sumY / area, area });
+      };
+      img.onerror = reject;
+      img.src = "data:image/png;base64," + maskB64;
+    });
+  }
+
+  function renderTrajectoryTable(rows) {
+    trajectoryBody.innerHTML = "";
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${r.frame_idx}</td>
+        <td>${r.obj_id ?? ""}</td>
+        <td>${Number.isFinite(r.center_x) ? r.center_x.toFixed(2) : ""}</td>
+        <td>${Number.isFinite(r.center_y) ? r.center_y.toFixed(2) : ""}</td>
+        <td>${r.area_px ?? ""}</td>
+        <td>${Number.isFinite(r.score) ? r.score.toFixed(6) : ""}</td>
+      `;
+      trajectoryBody.appendChild(tr);
+    });
+    trajMeta.textContent = `${rows.length} rows`;
+    btnDownloadCsv.disabled = rows.length === 0;
+    btnDownloadJson.disabled = rows.length === 0;
+  }
+
+  async function buildTrajectoryRows(frames) {
+    const frameKeys = Object.keys(frames).map(k => parseInt(k, 10)).sort((a, b) => a - b);
+    const rows = [];
+    for (const frameIdx of frameKeys) {
+      const arr = frames[String(frameIdx)] || [];
+      for (let i = 0; i < arr.length; i++) {
+        const m = arr[i];
+        if (!m.png_b64) continue;
+        const com = await centerOfMassFromMask(m.png_b64);
+        rows.push({
+          frame_idx: frameIdx,
+          obj_id: (m.obj_id !== undefined) ? m.obj_id : i,
+          center_x: com.cx,
+          center_y: com.cy,
+          area_px: com.area,
+          score: (m.score !== undefined && m.score !== null) ? Number(m.score) : null,
+        });
+      }
+    }
+    return rows;
+  }
+
+  function downloadText(filename, content, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportTrajectoryCsv() {
+    const lines = ["frame_idx,obj_id,center_x,center_y,area_px,score"];
+    trajectoryRows.forEach((r) => {
+      lines.push([
+        r.frame_idx,
+        r.obj_id ?? "",
+        Number.isFinite(r.center_x) ? r.center_x : "",
+        Number.isFinite(r.center_y) ? r.center_y : "",
+        r.area_px ?? "",
+        Number.isFinite(r.score) ? r.score : "",
+      ].join(","));
+    });
+    downloadText("ball_trajectory.csv", lines.join("\n"), "text/csv;charset=utf-8");
+  }
+
+  function exportTrajectoryJson() {
+    downloadText("ball_trajectory.json", JSON.stringify(trajectoryRows, null, 2), "application/json;charset=utf-8");
+  }
+
+  function clearPreviews() {
+    [preview1, preview2].forEach(c => {
+      c.width = 320;
+      c.height = 180;
+      const cctx = c.getContext("2d");
+      cctx.clearRect(0, 0, c.width, c.height);
+      cctx.fillStyle = "#f5f5f5";
+      cctx.fillRect(0, 0, c.width, c.height);
+      cctx.fillStyle = "#888";
+      cctx.fillText("No preview", 12, 24);
+    });
+    preview1Status.textContent = "No preview yet.";
+    preview2Status.textContent = "No preview yet.";
+  }
+
+  function baseDrawToCanvas(targetCtx, w, h) {
+    if (mode === "image" && imageObj) {
+      targetCtx.drawImage(imageObj, 0, 0, w, h);
+    } else if (mode === "video") {
+      targetCtx.drawImage(video, 0, 0, w, h);
+    } else {
+      targetCtx.fillStyle = "#f5f5f5";
+      targetCtx.fillRect(0, 0, w, h);
+      targetCtx.fillStyle = "#888";
+      targetCtx.fillText("No media", 12, 24);
+    }
+  }
+
+  function drawStage() {
+    if (mode === "image" && imageObj) {
+      canvas.width = imageObj.naturalWidth;
+      canvas.height = imageObj.naturalHeight;
+      ctx.drawImage(imageObj, 0, 0);
+    } else if (mode === "video") {
+      const w = video.videoWidth || 640;
+      const h = video.videoHeight || 360;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(video, 0, 0, w, h);
+    } else {
+      canvas.width = 640;
+      canvas.height = 360;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#f5f5f5";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#888";
+      ctx.fillText("Load an image or video", 20, 30);
+    }
+
+    for (const objId of [1, 2]) {
+      for (const p of objectPoints[objId]) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, objId === activeObjectId ? 7 : 6, 0, Math.PI * 2);
+        ctx.fillStyle = p.label === 1 ? pointStyles[objId].pos : pointStyles[objId].neg;
+        ctx.fill();
+        ctx.lineWidth = objId === activeObjectId ? 3 : 2;
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.stroke();
+
+        ctx.font = "12px sans-serif";
+        ctx.fillStyle = "white";
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = 3;
+        ctx.strokeText(String(objId), p.x + 9, p.y - 9);
+        ctx.fillText(String(objId), p.x + 9, p.y - 9);
+      }
+    }
+  }
+
+  function b64FromFile(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1]);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  function getClickXY(evt) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    const x = Math.round((evt.clientX - rect.left) * sx);
+    const y = Math.round((evt.clientY - rect.top) * sy);
+    return { x, y };
+  }
+
+  function setPoint(evt, label) {
+    if (mode === "none") return;
+    if (promptMode !== "points") return;
+    const { x, y } = getClickXY(evt);
+    objectPoints[activeObjectId].push({ x, y, label });
+    updateCounts();
+    drawStage();
+  }
+
+  function undoPoint() {
+    objectPoints[activeObjectId].pop();
+    updateCounts();
+    drawStage();
+  }
+
+  function clearActivePoints() {
+    objectPoints[activeObjectId] = [];
+    updateCounts();
+    drawStage();
+  }
+
+  function clearAllPoints() {
+    objectPoints[1] = [];
+    objectPoints[2] = [];
+    updateCounts();
+    drawStage();
+  }
+
+  async function health() {
+    clearResults();
+    const url = `${getBaseUrl()}/health`;
+    log(`GET ${url}`);
+    const r = await fetch(url);
+    const j = await r.json();
+    log(JSON.stringify(j, null, 2));
+  }
+
+  async function uploadVideoAndInitSession() {
+    clearResults();
+
+    const upUrl = `${getBaseUrl()}/video/upload`;
+    log(`POST ${upUrl} (multipart)`);
+    const fd = new FormData();
+    fd.append("file", file);
+    const upResp = await fetch(upUrl, { method: "POST", body: fd });
+    if (!upResp.ok) throw new Error(`upload failed: ${upResp.status} ${await upResp.text()}`);
+    const upJson = await upResp.json();
+    videoId = upJson.video_id;
+    log(`video_id=${videoId}`);
+
+    const initUrl = `${getBaseUrl()}/video/session/init`;
+    log(`POST ${initUrl}`);
+    const initResp = await fetch(initUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ video_id: videoId, mode: "tracker" })
+    });
+    if (!initResp.ok) throw new Error(`init failed: ${initResp.status} ${await initResp.text()}`);
+    const initJson = await initResp.json();
+    sessionId = initJson.session_id;
+    numFrames = initJson.num_frames;
+    serverW = initJson.width;
+    serverH = initJson.height;
+    log(`session_id=${sessionId} num_frames=${numFrames} server=${serverW}x${serverH}`);
+    btnPropagate.disabled = false;
+  }
+
+  function approxFrameIdx() {
+    if (mode !== "video" || !numFrames) return 0;
+    const dur = video.duration;
+    const t = video.currentTime;
+    if (!isFinite(dur) || dur <= 0) return 0;
+    return Math.max(0, Math.min(numFrames - 1, Math.round((t / dur) * (numFrames - 1))));
+  }
+
+  function anyPointsExist() {
+    return objectPoints[1].length > 0 || objectPoints[2].length > 0;
+  }
+
+  function addThumb(maskB64, caption) {
+    const box = document.createElement("div");
+    box.className = "thumbCard";
+    const img = document.createElement("img");
+    img.src = "data:image/png;base64," + maskB64;
+    const cap = document.createElement("div");
+    cap.className = "cap";
+    cap.textContent = caption;
+    box.appendChild(img);
+    box.appendChild(cap);
+    thumbs.appendChild(box);
+  }
+
+  async function drawPreviewCanvas(previewCanvas, previewCtx, objId, maskB64, statusText) {
+    const w = (mode === "image" && imageObj) ? imageObj.naturalWidth : (video.videoWidth || 640);
+    const h = (mode === "image" && imageObj) ? imageObj.naturalHeight : (video.videoHeight || 360);
+
+    previewCanvas.width = w;
+    previewCanvas.height = h;
+    previewCtx.clearRect(0, 0, w, h);
+    baseDrawToCanvas(previewCtx, w, h);
+
+    // draw only this object's points
+    for (const p of objectPoints[objId]) {
+      previewCtx.beginPath();
+      previewCtx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+      previewCtx.fillStyle = p.label === 1 ? pointStyles[objId].pos : pointStyles[objId].neg;
+      previewCtx.fill();
+      previewCtx.lineWidth = 2;
+      previewCtx.strokeStyle = "rgba(255,255,255,0.95)";
+      previewCtx.stroke();
+    }
+
+    if (maskB64) {
+      await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          previewCtx.save();
+          previewCtx.globalAlpha = 0.45;
+          previewCtx.drawImage(img, 0, 0, w, h);
+          previewCtx.restore();
+          resolve();
+        };
+        img.onerror = reject;
+        img.src = "data:image/png;base64," + maskB64;
+      });
+    }
+
+    if (objId === 1) preview1Status.textContent = statusText;
+    if (objId === 2) preview2Status.textContent = statusText;
+  }
+
+  async function overlayMasksOnStage(maskB64List, alpha = 0.35) {
+    if (!Array.isArray(maskB64List) || maskB64List.length === 0) return;
+    drawStage();
+
+    for (const maskB64 of maskB64List) {
+      if (!maskB64) continue;
+      await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          ctx.restore();
+          resolve();
+        };
+        img.onerror = reject;
+        img.src = "data:image/png;base64," + maskB64;
+      });
+    }
+  }
+
+  async function submitPrompt() {
+    clearResults();
+    clearPreviews();
+
+    const output = outputFmtEl.value;
+    const mask_threshold = parseFloat(maskThresholdEl.value);
+    const binarize = (binarizeEl.value === "true");
+
+    if (mode === "image") {
+      const imgB64 = await b64FromFile(file);
+      const stageMasksToOverlay = [];
+
+      if (promptMode === "text") {
+        const text = (textPromptEl.value || "").trim();
+        if (!text) {
+          log("Text prompt is empty. Enter text to use /segment/text.");
+          return;
+        }
+
+        // For /segment/text, very low mask_threshold (e.g. 0.0) can produce
+        // near full-image masks. Keep video-oriented threshold setting from
+        // affecting text mode by using a safer default when value is too low.
+        const textMaskThreshold = (isFinite(mask_threshold) && mask_threshold > 0)
+          ? mask_threshold
+          : 0.5;
+        const textScoreThreshold = 0.5;
+
+        const url = `${getBaseUrl()}/segment/text`;
+        const payload = {
+          image_b64: imgB64,
+          text,
+          output,
+          threshold: textScoreThreshold,
+          mask_threshold: textMaskThreshold,
+        };
+
+        log(`POST ${url} (image, text='${text}', threshold=${textScoreThreshold}, mask_threshold=${textMaskThreshold})`);
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!r.ok) throw new Error(`segment/text failed: ${r.status} ${await r.text()}`);
+
+        const j = await r.json();
+        const results = j.results || [];
+        log(`image text prompt: returned ${results.length} mask(s)`);
+        if (results.length > 0) {
+          const s = (results[0].score !== undefined && results[0].score !== null) ? Number(results[0].score).toFixed(4) : "n/a";
+          const b = Array.isArray(results[0].box_xyxy) ? JSON.stringify(results[0].box_xyxy) : "n/a";
+          log(`image text prompt first result: score=${s}, box=${b}`);
+        }
+
+        if (output === "png") {
+          const firstMask = results[0]?.png_b64 || null;
+          await drawPreviewCanvas(preview1, pctx1, 1, firstMask, `Text prompt: ${results.length} mask(s)`);
+          await drawPreviewCanvas(preview2, pctx2, 2, null, "Text mode: use left preview");
+          results.forEach((m, i) => {
+            if (m.png_b64) {
+              addThumb(m.png_b64, `Text mask ${i}`);
+              stageMasksToOverlay.push(m.png_b64);
+            }
+          });
+        } else {
+          preview1Status.textContent = `Text prompt: ${results.length} RLE mask(s)`;
+          preview2Status.textContent = "Text mode: use left preview";
+        }
+
+        resultsMeta.textContent = `Image text prompt: got ${results.length} masks`;
+        if (output === "png") await overlayMasksOnStage(stageMasksToOverlay);
+        else drawStage();
+        return;
+      }
+
+      if (!anyPointsExist()) {
+        log("No points. Add at least one point for object 1 or object 2.");
+        return;
+      }
+
+      let totalMasks = 0;
+
+      for (const objId of [1, 2]) {
+        const pts = objectPoints[objId];
+        if (!pts.length) {
+          if (objId === 1) preview1Status.textContent = "No points for object 1.";
+          if (objId === 2) preview2Status.textContent = "No points for object 2.";
+          continue;
+        }
+
+        const url = `${getBaseUrl()}/segment/visual`;
+        const payload = {
+          image_b64: imgB64,
+          points: pts,
+          output,
+          threshold: 0.5
+        };
+
+        log(`POST ${url} (image, object ${objId}, points=${pts.length})`);
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!r.ok) throw new Error(`segment/visual failed for object ${objId}: ${r.status} ${await r.text()}`);
+
+        const j = await r.json();
+        const results = j.results || [];
+        totalMasks += results.length;
+        log(`image object ${objId}: returned ${results.length} mask(s)`);
+
+        if (output === "png") {
+          if (results.length > 0 && results[0]?.png_b64) {
+            await drawPreviewCanvas(
+              objId === 1 ? preview1 : preview2,
+              objId === 1 ? pctx1 : pctx2,
+              objId,
+              results[0].png_b64,
+              `Object ${objId}: ${results.length} mask(s)`
+            );
+          } else {
+            await drawPreviewCanvas(
+              objId === 1 ? preview1 : preview2,
+              objId === 1 ? pctx1 : pctx2,
+              objId,
+              null,
+              `Object ${objId}: 0 masks`
+            );
+          }
+
+          results.forEach((m, i) => {
+            if (m.png_b64) {
+              addThumb(m.png_b64, `Obj ${objId} mask ${i}`);
+              stageMasksToOverlay.push(m.png_b64);
+            }
+          });
+        } else {
+          if (objId === 1) preview1Status.textContent = `Object 1: ${results.length} RLE mask(s)`;
+          if (objId === 2) preview2Status.textContent = `Object 2: ${results.length} RLE mask(s)`;
+        }
+      }
+
+      resultsMeta.textContent = `Image: got ${totalMasks} masks across all prompted objects`;
+      if (output === "png") await overlayMasksOnStage(stageMasksToOverlay);
+      else drawStage();
+      return;
+    }
+
+    if (mode === "video") {
+      if (promptMode !== "points") {
+        log("Video prompting currently supports points mode only.");
+        return;
+      }
+
+      if (!sessionId) {
+        log("No session. Upload/init video first.");
+        return;
+      }
+
+      const frame_idx = approxFrameIdx();
+      let totalMasks = 0;
+
+      // Build a single objects array and send one request to the server
+      const objects = [];
+      for (const objId of [1, 2]) {
+        const pts = objectPoints[objId];
+        if (!pts.length) continue;
+        objects.push({ obj_id: objId, points: pts });
+      }
+
+      if (objects.length === 0) {
+        log("No points for any object.");
+        return;
+      }
+
+      const url = `${getBaseUrl()}/video/session/prompt`;
+      const payload = {
+        session_id: sessionId,
+        frame_idx,
+        objects,
+        client_width: video.videoWidth,
+        client_height: video.videoHeight,
+        output,
+        mask_threshold,
+        binarize
+      };
+
+      log(`POST ${url} (video frame=${frame_idx}, objects=${objects.length})`);
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) throw new Error(`video/session/prompt failed: ${r.status} ${await r.text()}`);
+
+      const j = await r.json();
+      const masksAll = j.frame_masks || [];
+      totalMasks = masksAll.length;
+      log(`video prompt: returned ${masksAll.length} preview mask(s)`);
+
+      // For each object try to find a mask labelled with its obj_id, otherwise
+      // fall back to the first returned mask.
+      for (const objId of [1, 2]) {
+        const mask = masksAll.find(m => (m.obj_id !== undefined && m.obj_id === objId)) || masksAll[0] || null;
+        if (!mask) {
+          if (objId === 1) preview1Status.textContent = `Object 1: 0 preview masks`;
+          if (objId === 2) preview2Status.textContent = `Object 2: 0 preview masks`;
+          continue;
+        }
+
+        if (output === "png") {
+          if (mask.png_b64) {
+            await drawPreviewCanvas(
+              objId === 1 ? preview1 : preview2,
+              objId === 1 ? pctx1 : pctx2,
+              objId,
+              mask.png_b64,
+              `Object ${objId}: preview`
+            );
+            addThumb(mask.png_b64, `Obj ${mask.obj_id || objId} preview @ frame ${frame_idx}`);
+          }
+        } else {
+          if (objId === 1) preview1Status.textContent = `Object 1: RLE preview mask(s)`;
+          if (objId === 2) preview2Status.textContent = `Object 2: RLE preview mask(s)`;
+        }
+      }
+
+      resultsMeta.textContent = `Video prompt @ frame ${frame_idx}: got ${totalMasks} preview masks`;
+      drawStage();
+      return;
+    }
+  }
+
+  async function propagateVideo() {
+    clearResults();
+    if (mode !== "video" || !sessionId) return;
+
+    const output = outputFmtEl.value;
+    const mask_threshold = parseFloat(maskThresholdEl.value);
+    const binarize = (binarizeEl.value === "true");
+    const max_frames = parseInt(maxFramesEl.value, 10);
+
+    const url = `${getBaseUrl()}/video/session/propagate`;
+    const payload = {
+      session_id: sessionId,
+      max_frames: isFinite(max_frames) ? max_frames : 60,
+      output,
+      mask_threshold,
+      binarize
+    };
+
+    log(`POST ${url} (max_frames=${payload.max_frames})`);
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) throw new Error(`video/session/propagate failed: ${r.status} ${await r.text()}`);
+
+    const j = await r.json();
+    const frames = j.frames || {};
+    const keys = Object.keys(frames).map(k => parseInt(k, 10)).sort((a, b) => a - b);
+    log(`propagate returned frames=${keys.length}`);
+    resultsMeta.textContent = `Propagate: returned ${keys.length} frames`;
+
+    if (output !== "png") {
+      resultsMeta.textContent += " (RLE returned; rendering not implemented)";
+      return;
+    }
+
+    trajectoryRows = await buildTrajectoryRows(frames);
+    renderTrajectoryTable(trajectoryRows);
+
+    const showN = Math.min(12, keys.length);
+    for (let i = 0; i < showN; i++) {
+      const k = keys[i];
+      const arr = frames[String(k)] || [];
+      arr.forEach((m, idx) => {
+        const mid = (m.obj_id !== undefined) ? m.obj_id : idx;
+        if (m.png_b64) addThumb(m.png_b64, `frame ${k} obj ${mid} mask ${idx}`);
+      });
+    }
+
+    // Overlay first two masks from the nearest returned frame, if present.
+    const curIdx = approxFrameIdx();
+    if (keys.length) {
+      const bestKey = keys.reduce((best, x) => (
+        Math.abs(x - curIdx) < Math.abs(best - curIdx) ? x : best
+      ), keys[0]);
+
+      const arr = frames[String(bestKey)] || [];
+      drawStage();
+      // Prefer overlaying masks for obj_id 1 and 2 if available.
+      const maskObj1 = arr.find(x => x.obj_id === 1) || arr[0];
+      const maskObj2 = arr.find(x => x.obj_id === 2) || arr[1];
+
+      if (maskObj1?.png_b64) {
+        await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            ctx.save();
+            ctx.globalAlpha = 0.35;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+            resolve();
+          };
+          img.onerror = reject;
+          img.src = "data:image/png;base64," + maskObj1.png_b64;
+        });
+      }
+      if (maskObj2?.png_b64) {
+        await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            ctx.save();
+            ctx.globalAlpha = 0.35;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+            resolve();
+          };
+          img.onerror = reject;
+          img.src = "data:image/png;base64," + maskObj2.png_b64;
+        });
+      }
+
+      resultsMeta.textContent += ` (overlaying masks from frame ${bestKey})`;
+    }
+  }
+
+  btnHealth.addEventListener("click", () => health().catch(e => log("ERROR " + e.message)));
+  btnClear.addEventListener("click", () => { clearActivePoints(); clearResults(); clearPreviews(); });
+  btnUndo.addEventListener("click", () => { undoPoint(); clearResults(); clearPreviews(); });
+  btnSubmitPrompt.addEventListener("click", () => submitPrompt().catch(e => log("ERROR " + e.message)));
+  btnPropagate.addEventListener("click", () => propagateVideo().catch(e => log("ERROR " + e.message)));
+  btnDownloadCsv.addEventListener("click", () => exportTrajectoryCsv());
+  btnDownloadJson.addEventListener("click", () => exportTrajectoryJson());
+
+  obj1Btn.addEventListener("click", () => {
+    activeObjectId = 1;
+    updateObjectButtons();
+    drawStage();
+  });
+  obj2Btn.addEventListener("click", () => {
+    activeObjectId = 2;
+    updateObjectButtons();
+    drawStage();
+  });
+
+  promptModeEl.addEventListener("change", () => {
+    promptMode = promptModeEl.value === "text" ? "text" : "points";
+    applyPromptModeUiState();
+    clearResults();
+    clearPreviews();
+    drawStage();
+    if (promptMode === "text") {
+      log("Prompt mode set to text. Image submit will call /segment/text.");
+    } else {
+      log("Prompt mode set to points.");
+    }
+  });
+
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("mousedown", (e) => {
+    if (e.button === 0) setPoint(e, 1);
+    else if (e.button === 2) setPoint(e, 0);
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (mode === "none") return;
+    if (promptMode !== "points") return;
+    if (e.key === "Backspace") {
+      e.preventDefault();
+      undoPoint();
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      clearActivePoints();
+      clearResults();
+      clearPreviews();
+    }
+  });
+
+  fileInput.addEventListener("change", async () => {
+    clearResults();
+    clearPreviews();
+    clearAllPoints();
+
+    videoId = null;
+    sessionId = null;
+    numFrames = null;
+    serverW = null;
+    serverH = null;
+
+    file = fileInput.files?.[0] || null;
+    if (!file) {
+      setMode("none");
+      drawStage();
+      return;
+    }
+
+    fileInfo.textContent = `${file.name} (${Math.round(file.size / 1024)} KB)`;
+
+    if (file.type.startsWith("image/")) {
+      setMode("image");
+      video.style.display = "none";
+
+      const url = URL.createObjectURL(file);
+      imageObj = new Image();
+      imageObj.onload = () => drawStage();
+      imageObj.src = url;
+
+      log("Loaded image. Add points for object 1 and/or object 2, then submit prompt.");
+      applyPromptModeUiState();
+      return;
+    }
+
+    if (file.type.startsWith("video/")) {
+      setMode("video");
+      imageObj = null;
+      video.style.display = "block";
+      video.src = URL.createObjectURL(file);
+
+      await new Promise((res) => { video.onloadedmetadata = () => res(); });
+      await new Promise((res) => { video.oncanplay = () => res(); });
+
+      video.currentTime = 0;
+      await new Promise((res) => { video.onseeked = () => res(); });
+
+      drawStage();
+      log("Uploading video to server and initializing session...");
+      try {
+        await uploadVideoAndInitSession();
+        log("Video session ready. Scrub, add points for object 1 and/or object 2, then submit prompt.");
+        applyPromptModeUiState();
+      } catch (e) {
+        log("ERROR " + e.message);
+        btnPropagate.disabled = true;
+      }
+      return;
+    }
+
+    setMode("none");
+    drawStage();
+    log("Unsupported file type.");
+  });
+
+  video.addEventListener("timeupdate", () => {
+    if (mode === "video") drawStage();
+  });
+
+  video.addEventListener("seeked", () => {
+    if (mode === "video") drawStage();
+  });
+
+  video.addEventListener("play", () => {
+    const tick = () => {
+      if (mode === "video" && !video.paused && !video.ended) {
+        drawStage();
+        requestAnimationFrame(tick);
+      }
+    };
+    requestAnimationFrame(tick);
+  });
+
+  setMode("none");
+  updateObjectButtons();
+  updateCounts();
+  applyPromptModeUiState();
+  drawStage();
+  clearPreviews();
+  log("Ready. Load an image or video, add points for object 1 and/or 2, submit prompt.");
+})();
+</script>
+</body>
+</html>

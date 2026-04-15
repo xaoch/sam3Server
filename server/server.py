@@ -148,6 +148,41 @@ def cast_batchencoding_floats(batch, dtype: torch.dtype):
     return batch
 
 
+def normalize_masks_numpy(mask_tensor: torch.Tensor) -> np.ndarray:
+    """
+    Normalize SAM mask tensors to shape [num_masks, H, W] without dropping object channels.
+    Handles common layouts like:
+      - [num_masks, H, W]
+      - [num_masks, 1, H, W]
+      - [1, num_masks, H, W]
+      - [1, 1, H, W]
+      - [1, num_masks, 1, H, W]
+    """
+    masks_np = mask_tensor.detach().float().cpu().numpy()
+
+    if masks_np.ndim == 2:
+        return masks_np[None, ...]
+
+    if masks_np.ndim == 5:
+        if masks_np.shape[0] == 1:
+            masks_np = masks_np[0]
+        if masks_np.ndim == 4 and masks_np.shape[1] == 1:
+            masks_np = masks_np[:, 0]
+
+    if masks_np.ndim == 4:
+        if masks_np.shape[0] == 1 and masks_np.shape[1] > 1:
+            masks_np = masks_np[0]
+        elif masks_np.shape[1] == 1:
+            masks_np = masks_np[:, 0]
+        else:
+            masks_np = masks_np.reshape(-1, masks_np.shape[-2], masks_np.shape[-1])
+
+    if masks_np.ndim == 3:
+        return masks_np
+
+    raise ValueError(f"Unsupported mask tensor shape after normalization: {masks_np.shape}")
+
+
 # ----------------------------
 # Schemas
 # ----------------------------
@@ -212,6 +247,10 @@ class VideoSessionInitRequest(BaseModel):
 class VideoPromptRequest(BaseModel):
     session_id: str
     frame_idx: int = 0
+    # New: accept a single `objects` list to prompt multiple objects at once.
+    # Each object includes an `obj_id` and optional `points`/`boxes`.
+    objects: Optional[List[Dict[str, Any]]] = None
+    # Backwards-compatible single-object fields (deprecated):
     obj_id: int = 1
     points: Optional[List[Point]] = None
     boxes: Optional[List[Box]] = None
@@ -514,6 +553,23 @@ def segment_text(req: TextSegmentRequest):
 
     img = decode_base64_image(req.image_b64)
 
+    # Debug log: incoming /segment/text request (concise, avoids full base64 dump)
+    try:
+        dbg_req = {
+            "endpoint": "/segment/text",
+            "text": req.text,
+            "output": req.output,
+            "threshold": req.threshold,
+            "mask_threshold": req.mask_threshold,
+            "num_boxes": len(req.boxes) if req.boxes else 0,
+            "boxes": [[b.x1, b.y1, b.x2, b.y2, int(b.label)] for b in req.boxes] if req.boxes else [],
+            "image_size": [img.width, img.height],
+            "image_b64_len": len(req.image_b64) if req.image_b64 else 0,
+        }
+    except Exception:
+        dbg_req = {"endpoint": "/segment/text"}
+    print("SEGMENT_TEXT_IN:", dbg_req)
+
     input_boxes = None
     input_boxes_labels = None
     if req.boxes:
@@ -550,9 +606,16 @@ def segment_text(req: TextSegmentRequest):
     scores = post.get("scores", None)
 
     if masks is None:
+        try:
+            print("SEGMENT_TEXT_OUT:", {"endpoint": "/segment/text", "num_results": 0, "reason": "no_masks"})
+        except Exception:
+            pass
         return SegmentResponse(model="facebook/sam3", device=DEVICE, results=[])
 
-    masks_np = masks.detach().cpu().numpy().astype(bool)
+    try:
+        masks_np = normalize_masks_numpy(masks).astype(bool)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected masks shape in /segment/text: {e}")
     boxes_np = boxes.detach().cpu().numpy().tolist() if boxes is not None else [None] * masks_np.shape[0]
     scores_np = scores.detach().cpu().numpy().tolist() if scores is not None else [None] * masks_np.shape[0]
 
@@ -566,6 +629,20 @@ def segment_text(req: TextSegmentRequest):
             results.append(MaskResult(score=score_val, box_xyxy=box_val, png_b64=mask_to_base64_png(m)))
         else:
             results.append(MaskResult(score=score_val, box_xyxy=box_val, rle=encode_rle(m)))
+
+    # Debug log: outgoing /segment/text response (concise, no mask payloads)
+    try:
+        dbg_out = {
+            "endpoint": "/segment/text",
+            "num_results": len(results),
+            "output": req.output,
+            "mask_shape": list(masks_np.shape),
+            "scores": [r.score for r in results],
+            "boxes": [r.box_xyxy for r in results],
+        }
+    except Exception:
+        dbg_out = {"endpoint": "/segment/text", "num_results": len(results)}
+    print("SEGMENT_TEXT_OUT:", dbg_out)
 
     return SegmentResponse(model="facebook/sam3", device=DEVICE, results=results)
 
@@ -661,9 +738,10 @@ def segment_visual(req: VisualSegmentRequest):
     if masks is None:
         raise HTTPException(status_code=500, detail=f"Tracker post_process_masks failed. Errors: {post_errs}")
 
-    masks_np = masks.detach().float().cpu().numpy()
-    if masks_np.ndim == 4:
-        masks_np = masks_np.reshape(-1, masks_np.shape[-2], masks_np.shape[-1])
+    try:
+        masks_np = normalize_masks_numpy(masks)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected masks shape in /segment/visual: {e}")
 
     scores = getattr(outputs, "iou_scores", None)
     scores_np = None
@@ -772,8 +850,8 @@ def video_session_prompt(req: VideoPromptRequest):
         raise HTTPException(status_code=400, detail="This endpoint is only for tracker sessions.")
     if not HAS_VIDEO_TRACKER:
         raise HTTPException(status_code=501, detail="Sam3TrackerVideoModel/Processor not available.")
-    if (not req.points) and (not req.boxes):
-        raise HTTPException(status_code=400, detail="Provide points and/or boxes for tracker-video prompting.")
+    if (not getattr(req, "objects", None)) and (not req.points) and (not req.boxes):
+        raise HTTPException(status_code=400, detail="Provide points and/or boxes (or objects list) for tracker-video prompting.")
 
     sess = entry["session"]
     num_frames = int(entry.get("num_frames", 0))
@@ -816,46 +894,160 @@ def video_session_prompt(req: VideoPromptRequest):
         y2 = _clip(y2, 0, server_h - 1)
         return Box(x1=x1, y1=y1, x2=x2, y2=y2, label=b.label)
 
-    points = req.points
-    boxes = req.boxes
+    def _coerce_box_like(raw_box: Any) -> Box:
+        """Accept Box/dict/list and coerce numeric coords (including floats) to int pixels."""
+        if isinstance(raw_box, Box):
+            return raw_box
 
-    if (sx != 1.0) or (sy != 1.0):
-        if points:
-            scaled_points: List[Point] = []
-            for p in points:
-                x, y = _scale_xy(p.x, p.y)
-                scaled_points.append(Point(x=x, y=y, label=p.label))
-            points = scaled_points
-        if boxes:
-            boxes = [_scale_box(b) for b in boxes]
+        try:
+            if isinstance(raw_box, dict):
+                x1 = int(round(float(raw_box.get("x1"))))
+                y1 = int(round(float(raw_box.get("y1"))))
+                x2 = int(round(float(raw_box.get("x2"))))
+                y2 = int(round(float(raw_box.get("y2"))))
+                label = int(raw_box.get("label", 1))
+            elif isinstance(raw_box, (list, tuple)) and len(raw_box) >= 4:
+                x1 = int(round(float(raw_box[0])))
+                y1 = int(round(float(raw_box[1])))
+                x2 = int(round(float(raw_box[2])))
+                y2 = int(round(float(raw_box[3])))
+                label = 1
+            else:
+                raise ValueError("box must be dict with x1/y1/x2/y2 or a 4-value list")
 
-    # ---- Build SAM3 tracker-video inputs ----
+            if label not in (0, 1):
+                label = 1
+
+            return Box(x1=x1, y1=y1, x2=x2, y2=y2, label=label)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid box format in objects payload: {e}")
+
+    # Build inputs from the provided objects list (client should supply
+    # all objects in a single request). Fall back to single-object fields
+    # for backwards compatibility.
+    objects_input = None
+    if getattr(req, "objects", None):
+        objects_input = req.objects
+    else:
+        objects_input = [{
+            "obj_id": req.obj_id,
+            "points": [p.dict() for p in req.points] if req.points else None,
+            "boxes": [b.dict() for b in req.boxes] if req.boxes else None,
+        }]
+
+    # Normalize each object's prompts to documented shapes and add them into the
+    # inference session. This follows the official examples where each object's
+    # points are shaped as [batch=1, object=1, num_points, 2] and labels as
+    # [batch=1, object=1, num_points].
+    obj_ids_list: List[int] = []
+    prepared_objects: List[Dict[str, Any]] = []
+
+    for obj in objects_input:
+        oid = int(obj.get("obj_id"))
+        obj_ids_list.append(oid)
+
+        pts: List[List[int]] = []
+        labs: List[int] = []
+        raw_points = obj.get("points") or []
+        for p in raw_points:
+            x = p.get("x") if isinstance(p, dict) else p.x
+            y = p.get("y") if isinstance(p, dict) else p.y
+            label = p.get("label", 1) if isinstance(p, dict) else p.label
+            xs, ys = _scale_xy(x, y)
+            pts.append([xs, ys])
+            labs.append(int(label))
+
+        box_xyxy = None
+        raw_boxes = obj.get("boxes") or []
+        if raw_boxes:
+            b = raw_boxes[0]
+            bx = _coerce_box_like(b)
+            sb = _scale_box(bx)
+            box_xyxy = [sb.x1, sb.y1, sb.x2, sb.y2]
+
+        prepared_objects.append({"obj_id": oid, "points": pts, "labels": labs, "box": box_xyxy})
+
+    try:
+        print(
+            "AGG_PROMPT_PAYLOAD:",
+            {
+                "obj_ids": obj_ids_list,
+                "num_objs": len(obj_ids_list),
+                "objects": [
+                    {"obj_id": o["obj_id"], "n_points": len(o["points"]), "has_box": o["box"] is not None}
+                    for o in prepared_objects
+                ],
+            },
+        )
+    except Exception:
+        pass
+
+    # Add all objects in one call following official multi-object examples:
+    # obj_ids=[...], input_points=[[[obj1_points], [obj2_points], ...]],
+    # input_labels=[[[obj1_labels], [obj2_labels], ...]]
     input_points = None
     input_labels = None
     input_boxes = None
 
-    if points:
-        input_points = [[[[p.x, p.y] for p in points]]]
-        input_labels = [[[int(p.label) for p in points]]]
+    if any(len(o["points"]) > 0 for o in prepared_objects):
+        input_points = [[o["points"] for o in prepared_objects]]
+        input_labels = [[o["labels"] for o in prepared_objects]]
 
-    if boxes:
-        # simplest: first box as object prompt
-        b = boxes[0]
-        input_boxes = [[[b.x1, b.y1, b.x2, b.y2]]]
+    boxes_present = [o["box"] is not None for o in prepared_objects]
+    if any(boxes_present):
+        if not all(boxes_present):
+            raise HTTPException(
+                status_code=400,
+                detail="For multi-object prompt with boxes, provide one box for every object (or use points only).",
+            )
+        input_boxes = [[o["box"] for o in prepared_objects]]
 
-    # 1) Add inputs
+    # Follow docs: for a new conditioning setup, reset tracking data before adding
+    # new object prompts.
+    if req.clear_old_inputs:
+        try:
+            sess.reset_inference_session()
+        except Exception:
+            pass
+
     try:
         video_tracker_processor.add_inputs_to_inference_session(
             inference_session=sess,
             frame_idx=req.frame_idx,
-            obj_ids=req.obj_id,
+            obj_ids=obj_ids_list,
             input_points=input_points,
             input_labels=input_labels,
             input_boxes=input_boxes,
             clear_old_inputs=req.clear_old_inputs,
         )
     except Exception as e:
+        print(
+            "ADD_INPUTS_ERROR:",
+            {
+                "obj_ids": obj_ids_list,
+                "input_points": input_points,
+                "input_labels": input_labels,
+                "input_boxes": input_boxes,
+                "error": repr(e),
+            },
+        )
         raise HTTPException(status_code=500, detail=f"add_inputs_to_inference_session failed: {e}")
+
+    # --- Debug log: incoming prompt (concise) ---
+    try:
+        dbg_in = {
+            "session_id": req.session_id,
+            "frame_idx": int(req.frame_idx),
+            "objects": [
+                {"obj_id": int(o.get("obj_id")), "n_points": len(o.get("points") or []), "n_boxes": len(o.get("boxes") or [])}
+                for o in objects_input
+            ],
+            "client_w": req.client_width,
+            "client_h": req.client_height,
+        }
+    except Exception:
+        dbg_in = {"session_id": req.session_id, "frame_idx": req.frame_idx}
+    print("PROMPT_IN:", dbg_in)
 
     # 2) RUN inference on that frame (critical!)
     try:
@@ -888,11 +1080,32 @@ def video_session_prompt(req: VideoPromptRequest):
     if masks is None:
         raise HTTPException(status_code=500, detail=f"video post_process_masks failed. Errors: {post_errs}")
 
+    # Documentation maps mask channels to `inference_session.obj_ids` order.
+    session_obj_ids = None
+    try:
+        session_obj_ids = list(getattr(sess, "obj_ids", []))
+    except Exception:
+        session_obj_ids = None
+
     masks_np = masks.detach().float().cpu().numpy()
+    # Normalize mask tensor without dropping object channels.
+    # Common shapes seen:
+    # - [num_obj, 1, H, W]
+    # - [1, num_obj, H, W]
+    # - [num_obj, H, W]
+    # - [1, 1, H, W]
+    if masks_np.ndim == 5:
+        if masks_np.shape[0] == 1:
+            masks_np = masks_np[0]  # [obj, k, H, W]
+        if masks_np.ndim == 4 and masks_np.shape[1] == 1:
+            masks_np = masks_np[:, 0]  # [obj, H, W]
     if masks_np.ndim == 4:
-        masks_np = masks_np[0]
-    if masks_np.ndim == 4:
-        masks_np = masks_np.reshape(-1, masks_np.shape[-2], masks_np.shape[-1])
+        if masks_np.shape[0] == 1 and masks_np.shape[1] > 1:
+            masks_np = masks_np[0]  # [obj, H, W]
+        elif masks_np.shape[1] == 1:
+            masks_np = masks_np[:, 0]  # [obj, H, W]
+        else:
+            masks_np = masks_np.reshape(-1, masks_np.shape[-2], masks_np.shape[-1])
 
     # Scores (best-effort: different builds expose different fields)
     scores = getattr(out, "iou_scores", None)
@@ -907,6 +1120,7 @@ def video_session_prompt(req: VideoPromptRequest):
             scores_np = None
 
     frame_results: List[Dict[str, Any]] = []
+    debug_frame_masks: List[Dict[str, Any]] = []
     for i in range(masks_np.shape[0]):
         m = masks_np[i]
         mb = (m >= 0.5) if not req.binarize else (m.astype(np.float32) >= 0.5)
@@ -915,20 +1129,60 @@ def video_session_prompt(req: VideoPromptRequest):
         if req.score_threshold is not None and score_val is not None and score_val < float(req.score_threshold):
             continue
 
+        # Primary mapping: channel index -> inference_session.obj_ids[i]
+        obj_id_val = None
+        if session_obj_ids is not None and i < len(session_obj_ids):
+            try:
+                obj_id_val = int(session_obj_ids[i])
+            except Exception:
+                obj_id_val = None
+        # Fallback mapping from output object id fields if available.
+        if obj_id_val is None:
+            possible_attrs = ["out_obj_ids", "obj_ids", "object_ids", "out_obj_id", "obj_id"]
+            for an in possible_attrs:
+                val = getattr(out, an, None)
+                if val is not None:
+                    try:
+                        if hasattr(val, "tolist"):
+                            lst = val.tolist()
+                        else:
+                            lst = list(val)
+                        if i < len(lst):
+                            obj_id_val = int(lst[i])
+                            break
+                    except Exception:
+                        pass
+
+        # Prepare response entry (do not include heavy base64 in debug log)
         if req.output == "png":
-            frame_results.append({"score": score_val, "png_b64": mask_to_base64_png(mb)})
+            png_b64 = mask_to_base64_png(mb)
+            frame_results.append({"obj_id": obj_id_val, "score": score_val, "png_b64": png_b64})
         else:
-            frame_results.append({"score": score_val, "rle": encode_rle(mb)})
+            rle = encode_rle(mb)
+            frame_results.append({"obj_id": obj_id_val, "score": score_val, "rle": rle})
+
+        # Compute compact debug info for this mask
+        try:
+            area = int(mb.astype(int).sum())
+            ys, xs = np.where(mb)
+            if len(xs):
+                bbox = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
+            else:
+                bbox = None
+        except Exception:
+            area = None
+            bbox = None
+        debug_frame_masks.append({"obj_id": obj_id_val, "score": score_val, "area": area, "bbox": bbox})
 
     # record last prompted frame (used as propagate start)
     entry["last_prompt_frame_idx"] = int(req.frame_idx)
     entry["ts"] = time.time()
 
-    return {
+    resp = {
         "ok": True,
         "session_id": req.session_id,
         "frame_idx": req.frame_idx,
-        "obj_id": req.obj_id,
+        "obj_ids": obj_ids_list,
         "server_width": server_w,
         "server_height": server_h,
         "scale_x": sx,
@@ -936,11 +1190,33 @@ def video_session_prompt(req: VideoPromptRequest):
         "frame_masks": frame_results,
     }
 
+    # concise debug output (do not include base64 strings)
+    try:
+        dbg_out = {
+            "session_id": resp.get("session_id"),
+            "frame_idx": resp.get("frame_idx"),
+            "num_masks": len(debug_frame_masks),
+            "session_obj_ids": session_obj_ids,
+            "masks": debug_frame_masks,
+        }
+    except Exception:
+        dbg_out = {"session_id": resp.get("session_id"), "frame_idx": resp.get("frame_idx")}
+    print("PROMPT_OUT:", dbg_out)
+
+    return resp
+
 
 @app.post("/video/session/propagate")
 @torch.inference_mode()
 def video_session_propagate(req: VideoPropagateRequest):
     _cleanup_registry()
+
+    # Debug log: incoming propagate request
+    try:
+        dbg_prop_in = {"session_id": req.session_id, "max_frames": req.max_frames, "only_frames": req.only_frames, "mask_threshold": req.mask_threshold, "binarize": req.binarize, "output": req.output}
+    except Exception:
+        dbg_prop_in = {"session_id": req.session_id}
+    print("PROPAGATE_IN:", dbg_prop_in)
 
     entry = VIDEO_SESSIONS.get(req.session_id)
     if not entry:
@@ -1014,10 +1290,31 @@ def video_session_propagate(req: VideoPropagateRequest):
             raise HTTPException(status_code=500, detail=f"video post_process_masks failed. Errors: {post_errs}")
 
         masks_np = masks.detach().float().cpu().numpy()
+        # Normalize mask tensor without dropping object channels.
+        # Common shapes:
+        # - [num_obj, 1, H, W]
+        # - [1, num_obj, H, W]
+        # - [num_obj, H, W]
+        # - [1, 1, H, W]
+        if masks_np.ndim == 5:
+            if masks_np.shape[0] == 1:
+                masks_np = masks_np[0]
+            if masks_np.ndim == 4 and masks_np.shape[1] == 1:
+                masks_np = masks_np[:, 0]
         if masks_np.ndim == 4:
-            masks_np = masks_np[0]
-        if masks_np.ndim == 4:
-            masks_np = masks_np.reshape(-1, masks_np.shape[-2], masks_np.shape[-1])
+            if masks_np.shape[0] == 1 and masks_np.shape[1] > 1:
+                masks_np = masks_np[0]
+            elif masks_np.shape[1] == 1:
+                masks_np = masks_np[:, 0]
+            else:
+                masks_np = masks_np.reshape(-1, masks_np.shape[-2], masks_np.shape[-1])
+
+        # Prefer mapping mask index by session object order (doc behavior).
+        session_obj_ids = None
+        try:
+            session_obj_ids = list(getattr(sess, "obj_ids", []))
+        except Exception:
+            session_obj_ids = None
 
         scores = getattr(out, "iou_scores", None)
         if scores is None:
@@ -1031,6 +1328,7 @@ def video_session_propagate(req: VideoPropagateRequest):
                 scores_np = None
 
         frame_results: List[Dict[str, Any]] = []
+        debug_frame_masks: List[Dict[str, Any]] = []
         for i in range(masks_np.shape[0]):
             m = masks_np[i]
             mb = (m >= 0.5) if not req.binarize else (m.astype(np.float32) >= 0.5)
@@ -1039,12 +1337,58 @@ def video_session_propagate(req: VideoPropagateRequest):
             if req.score_threshold is not None and score_val is not None and score_val < float(req.score_threshold):
                 continue
 
+            # Primary mapping: channel index -> inference_session.obj_ids[i]
+            obj_id_val = None
+            if session_obj_ids is not None and i < len(session_obj_ids):
+                try:
+                    obj_id_val = int(session_obj_ids[i])
+                except Exception:
+                    obj_id_val = None
+
+            # Fallback mapping from output fields when available.
+            if obj_id_val is None:
+                possible_attrs = ["out_obj_ids", "obj_ids", "object_ids", "out_obj_id", "obj_id"]
+                for an in possible_attrs:
+                    val = getattr(out, an, None)
+                    if val is not None:
+                        try:
+                            if hasattr(val, "tolist"):
+                                lst = val.tolist()
+                            else:
+                                lst = list(val)
+                            if i < len(lst):
+                                obj_id_val = int(lst[i])
+                                break
+                        except Exception:
+                            pass
+
             if req.output == "png":
-                frame_results.append({"score": score_val, "png_b64": mask_to_base64_png(mb)})
+                png_b64 = mask_to_base64_png(mb)
+                frame_results.append({"obj_id": obj_id_val, "score": score_val, "png_b64": png_b64})
             else:
-                frame_results.append({"score": score_val, "rle": encode_rle(mb)})
+                rle = encode_rle(mb)
+                frame_results.append({"obj_id": obj_id_val, "score": score_val, "rle": rle})
+
+            # compute compact debug info
+            try:
+                area = int(mb.astype(int).sum())
+                ys, xs = np.where(mb)
+                if len(xs):
+                    bbox = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
+                else:
+                    bbox = None
+            except Exception:
+                area = None
+                bbox = None
+            debug_frame_masks.append({"obj_id": obj_id_val, "score": score_val, "area": area, "bbox": bbox})
 
         outputs_per_frame[frame_idx] = frame_results
+
+        # Debug log per-frame result summary
+        try:
+            print("PROPAGATE_OUT_FRAME:", {"frame_idx": frame_idx, "num_masks": len(debug_frame_masks), "masks": debug_frame_masks})
+        except Exception:
+            pass
 
         if wanted is not None and len(outputs_per_frame) >= len(wanted):
             break
