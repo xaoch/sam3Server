@@ -31,8 +31,5 @@ RUN /opt/venv/bin/pip install --no-cache-dir av || true
 RUN /opt/venv/bin/pip install --no-cache-dir pycocotools || true
 
 EXPOSE 8000
-<<<<<<< HEAD
+
 CMD ["/opt/venv/bin/python", "-m", "uvicorn", "server.server:app", "--host", "0.0.0.0", "--port", "8000"]
-=======
-CMD ["/opt/venv/bin/python", "-m", "uvicorn", "server.server:app", "--host", "0.0.0.0", "--port", "8000"]
->>>>>>> 9eb69a49e2c1d09e475de7a53e2f2f6c47d3aa26
